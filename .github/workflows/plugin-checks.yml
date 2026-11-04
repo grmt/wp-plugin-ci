@@ -1,0 +1,152 @@
+name: "Plugin checks"
+
+# Checks every own WordPress plugin shares. Called from a plugin's CI with
+# `uses: grmt/wp-plugin-ci/.github/workflows/plugin-checks.yml@main`.
+#
+# The PHP versions live here, in one place: PHP_FLOOR is the plugins'
+# minimum and the servers' PHP, PHP_NEWEST the newest release. Raise them
+# here when the servers move up.
+on:
+  workflow_call:
+    inputs:
+      slug:
+        description: "Plugin folder name, e.g. avpvh-gallery."
+        required: true
+        type: string
+      artifact:
+        description: "Build artifact holding the plugin as installed. Empty: the repo itself is the plugin."
+        required: false
+        type: string
+        default: ""
+      ignore-codes:
+        description: "Plugin Check codes to ignore, one per line."
+        required: false
+        type: string
+        default: ""
+      exclude-directories:
+        description: "Directories Plugin Check skips, comma-separated."
+        required: false
+        type: string
+        default: ""
+
+env:
+  PHP_FLOOR: "8.4"
+  PHP_NEWEST: "8.5"
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: "PHP versions"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.versions.outputs.matrix }}
+    steps:
+      - id: versions
+        run: echo "matrix=[\"${PHP_FLOOR}\", \"${PHP_NEWEST}\"]" >> "$GITHUB_OUTPUT"
+
+  platform:
+    name: "Dependencies on PHP floor"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+
+      - name: "Check runtime dependencies"
+        run: |
+          if [ -f composer.lock ]; then
+            composer check-platform-reqs --no-dev --lock
+          else
+            echo "No composer.lock; nothing to check."
+          fi
+
+  syntax:
+    name: "PHP syntax (${{ matrix.php }})"
+    runs-on: ubuntu-latest
+    needs: versions
+    strategy:
+      matrix:
+        php: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: "Lint PHP files"
+        run: |
+          find . -name '*.php' \
+            -not -path './vendor/*' -not -path './node_modules/*' -not -path './dist/*' -not -path './.git/*' \
+            -print0 | xargs -0 -n 1 -P 4 php -l -d display_errors=stderr > /dev/null
+
+  compatibility:
+    name: "PHP compatibility"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+          tools: none
+
+      - name: "Install PHPCompatibilityWP"
+        run: |
+          composer global config --no-interaction allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer global require --no-interaction --quiet \
+            squizlabs/php_codesniffer phpcompatibility/phpcompatibility-wp dealerdirect/phpcodesniffer-composer-installer
+
+      - name: "Check compatibility with the PHP floor and later"
+        run: |
+          "$(composer global config bin-dir --absolute)/phpcs" -p --colors \
+            --standard=PHPCompatibilityWP --runtime-set testVersion "${PHP_FLOOR}-" \
+            --extensions=php --ignore='*/vendor/*,*/node_modules/*,*/dist/*' .
+
+  plugin-check:
+    name: "Plugin check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Download build artifact"
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: ${{ inputs.slug }}
+
+      - name: "Checkout"
+        if: inputs.artifact == ''
+        uses: actions/checkout@v7
+        with:
+          path: ${{ inputs.slug }}
+
+      - name: "Drop repository-only files"
+        if: inputs.artifact == ''
+        run: |
+          rm -rf "${{ inputs.slug }}/.git" "${{ inputs.slug }}/.github"
+
+      # plugin-check-action v1 runs PHP 8.3 and overwrites .wp-env.json;
+      # wp-env merges the override on top.
+      - name: "Set wp-env PHP version"
+        run: |
+          echo "{\"phpVersion\": \"${PHP_FLOOR}\"}" > .wp-env.override.json
+
+      - name: "Run plugin check"
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: ${{ inputs.slug }}
+          ignore-codes: ${{ inputs.ignore-codes }}
+          exclude-directories: ${{ inputs.exclude-directories }}
