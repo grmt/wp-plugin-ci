@@ -46,5 +46,13 @@ jobs:
         plugin_updater_detected
 ```
 
-Inputs: `slug` (required), `artifact`, `ignore-codes` (one per line) and
-`exclude-directories` (comma-separated), the latter two passed to Plugin Check.
+Inputs:
+
+- `slug` (required): the plugin folder name.
+- `artifact`: build artifact holding the plugin files at its root. Without
+  it the repo itself is the plugin; its runtime Composer dependencies
+  (`composer install --no-dev`) are installed first.
+- `ignore-codes`, `exclude-checks`, `exclude-files`, `exclude-directories`:
+  passed to Plugin Check, one per line.
+- `extra-plugins`: other public plugin repos (`owner/repo`, main branch)
+  installed next to this one, e.g. a plugin this one depends on.
