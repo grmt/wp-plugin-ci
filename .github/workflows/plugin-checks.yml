@@ -24,7 +24,22 @@ on:
         type: string
         default: ""
       exclude-directories:
-        description: "Directories Plugin Check skips, comma-separated."
+        description: "Directories Plugin Check skips, one per line."
+        required: false
+        type: string
+        default: ""
+      exclude-files:
+        description: "Files Plugin Check skips (exact names), one per line."
+        required: false
+        type: string
+        default: ""
+      exclude-checks:
+        description: "Plugin Check checks to skip, one per line."
+        required: false
+        type: string
+        default: ""
+      extra-plugins:
+        description: "Other public plugin repos (owner/repo, main branch) to install next to this one, one per line."
         required: false
         type: string
         default: ""
@@ -138,11 +153,43 @@ jobs:
         run: |
           rm -rf "${{ inputs.slug }}/.git" "${{ inputs.slug }}/.github"
 
-      # plugin-check-action v1 runs PHP 8.3 and overwrites .wp-env.json;
-      # wp-env merges the override on top.
-      - name: "Set wp-env PHP version"
+      # Checked out from the repo, the plugin still needs its runtime vendor/.
+      - name: "Setup PHP"
+        if: inputs.artifact == '' && hashFiles(format('{0}/composer.json', inputs.slug)) != ''
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+
+      - name: "Install runtime Composer dependencies"
+        if: inputs.artifact == '' && hashFiles(format('{0}/composer.json', inputs.slug)) != ''
+        working-directory: ${{ inputs.slug }}
         run: |
-          echo "{\"phpVersion\": \"${PHP_FLOOR}\"}" > .wp-env.override.json
+          composer install -n --prefer-dist --no-dev
+
+      - name: "Checkout extra plugins"
+        if: inputs.extra-plugins != ''
+        env:
+          EXTRA_PLUGINS: ${{ inputs.extra-plugins }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for repo in $EXTRA_PLUGINS; do
+            git clone --depth 1 "https://github.com/${repo}.git" "${repo#*/}"
+          done
+
+      # plugin-check-action v1 runs PHP 8.3 and overwrites .wp-env.json;
+      # wp-env merges the override on top. The action mounts the plugin under
+      # test via "mappings", so "plugins" here only adds the extra ones.
+      # testsEnvironment false skips the tests containers Plugin Check never uses.
+      - name: "Write wp-env override"
+        env:
+          EXTRA_PLUGINS: ${{ inputs.extra-plugins }}
+        run: |
+          plugins=$(for repo in $EXTRA_PLUGINS; do echo "./${repo#*/}"; done | jq -R . | jq -s -c .)
+          jq -n --arg php "$PHP_FLOOR" --argjson plugins "$plugins" \
+            '{phpVersion: $php, testsEnvironment: false} + (if ($plugins | length) > 0 then {plugins: $plugins} else {} end)' \
+            > .wp-env.override.json
+          cat .wp-env.override.json
 
       - name: "Run plugin check"
         uses: wordpress/plugin-check-action@v1
@@ -150,3 +197,5 @@ jobs:
           build-dir: ${{ inputs.slug }}
           ignore-codes: ${{ inputs.ignore-codes }}
           exclude-directories: ${{ inputs.exclude-directories }}
+          exclude-files: ${{ inputs.exclude-files }}
+          exclude-checks: ${{ inputs.exclude-checks }}
