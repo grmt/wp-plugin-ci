@@ -5,7 +5,8 @@ name: "Plugin checks"
 #
 # The PHP versions live here, in one place: PHP_FLOOR is the plugins'
 # minimum and the servers' PHP, PHP_NEWEST the newest release. Raise them
-# here when the servers move up.
+# here when the servers move up; the "Declared PHP floor" job then fails
+# every plugin that still states the old minimum.
 on:
   workflow_call:
     inputs:
@@ -60,6 +61,88 @@ jobs:
     steps:
       - id: versions
         run: echo "matrix=[\"${PHP_FLOOR}\", \"${PHP_NEWEST}\"]" >> "$GITHUB_OUTPUT"
+
+  floor:
+    name: "Declared PHP floor"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          path: source
+
+      - name: "Download build artifact"
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: build
+
+      # The minimum PHP a plugin states must be the floor CI tests on. The
+      # plugin header is checked on the plugin as installed (the build, when
+      # there is one), composer.json on the source.
+      - name: "Compare the declared minimums with PHP_FLOOR"
+        env:
+          PLUGIN_DIR: ${{ inputs.artifact != '' && 'build' || 'source' }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          floor = os.environ["PHP_FLOOR"]
+          plugin = os.environ["PLUGIN_DIR"]
+          errors, found = [], []
+
+          def mm(text):
+              m = re.search(r"(\d+)\.(\d+)", text)
+              return f"{m.group(1)}.{m.group(2)}" if m else None
+
+          def field(path, name):
+              with open(path, encoding="utf-8", errors="replace") as f:
+                  head = f.read(8192)  # WordPress reads the first 8 KB too
+              m = re.search(r"^[ \t/*#@]*" + re.escape(name) + r":(.*)$", head, re.M | re.I)
+              return m.group(1).strip() if m else None
+
+          def compare(where, value):
+              found.append(f"{where}: {value}")
+              if mm(value) != floor:
+                  errors.append(f"{where} says {value}, the floor is {floor}")
+
+          mains = [os.path.join(plugin, n) for n in sorted(os.listdir(plugin))
+                   if n.endswith(".php") and field(os.path.join(plugin, n), "Plugin Name")]
+          if not mains:
+              errors.append(f"no plugin header (Plugin Name:) in a PHP file at the root of {plugin}/")
+          for path in mains:
+              value = field(path, "Requires PHP")
+              if value:
+                  compare(f"{os.path.basename(path)} Requires PHP", value)
+              else:
+                  errors.append(f"{os.path.basename(path)} has no 'Requires PHP:' header; WordPress uses it to refuse older PHP")
+
+          readme = os.path.join(plugin, "readme.txt")
+          if os.path.isfile(readme) and field(readme, "Requires PHP"):
+              compare("readme.txt Requires PHP", field(readme, "Requires PHP"))
+
+          composer = os.path.join("source", "composer.json")
+          if os.path.isfile(composer):
+              with open(composer, encoding="utf-8") as f:
+                  data = json.load(f)
+              constraint = data.get("require", {}).get("php")
+              if constraint:
+                  # The lowest version any alternative of the constraint allows
+                  lows = [mm(alt) for alt in constraint.split("|") if mm(alt)]
+                  lowest = min(lows, key=lambda v: tuple(map(int, v.split("."))), default=None)
+                  found.append(f"composer.json require.php: {constraint}")
+                  if lowest != floor:
+                      errors.append(f"composer.json require.php is {constraint}, the floor is {floor}")
+              platform = data.get("config", {}).get("platform", {}).get("php")
+              if platform and mm(platform) != floor:
+                  errors.append(f"composer.json config.platform.php is {platform}, the floor is {floor}")
+
+          print("\n".join(found))
+          for e in errors:
+              print(f"::error::{e}")
+          sys.exit(1 if errors else 0)
+          PY
 
   platform:
     name: "Dependencies on PHP floor"
