@@ -10,6 +10,7 @@ live in one place, [`plugin-checks.yml`](.github/workflows/plugin-checks.yml):
 | Job | What |
 |---|---|
 | Declared PHP floor | The plugin header's `Requires PHP` (required), `readme.txt`'s and `composer.json`'s `require.php` / `config.platform.php` (when present) all state `PHP_FLOOR`. Checked on the build when there is one. |
+| Global prefix | Only with the `prefixes` input: WordPress' `PrefixAllGlobals` sniff, so functions, classes, constants, namespaces and hook names start with one of the prefixes (global variables excepted). Checked on the build when there is one. |
 | Dependencies on PHP floor | `composer check-platform-reqs --no-dev --lock`, if the plugin has a `composer.lock` |
 | PHP syntax | `php -l` on every PHP file, on the floor and the newest PHP |
 | PHP compatibility | PHPCS with PHPCompatibilityWP, `testVersion` floor and later |
@@ -55,5 +56,6 @@ Inputs:
   (`composer install --no-dev`) are installed first.
 - `ignore-codes`, `exclude-checks`, `exclude-files`, `exclude-directories`:
   passed to Plugin Check, one per line.
+- `prefixes`: the prefixes global names must carry, one per line, e.g. `avpvh_flst` (see the naming convention in the plugins' shared CLAUDE.md). Without it the prefix check is skipped.
 - `extra-plugins`: other public plugin repos (`owner/repo`, main branch)
   installed next to this one, e.g. a plugin this one depends on.

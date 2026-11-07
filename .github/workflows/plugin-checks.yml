@@ -44,6 +44,11 @@ on:
         required: false
         type: string
         default: ""
+      prefixes:
+        description: "Prefixes every global name must start with, one per line (e.g. avpvh_flst). Empty: the prefix check is skipped."
+        required: false
+        type: string
+        default: ""
 
 env:
   PHP_FLOOR: "8.4"
@@ -61,6 +66,66 @@ jobs:
     steps:
       - id: versions
         run: echo "matrix=[\"${PHP_FLOOR}\", \"${PHP_NEWEST}\"]" >> "$GITHUB_OUTPUT"
+
+  prefix:
+    name: "Global prefix"
+    if: inputs.prefixes != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        if: inputs.artifact == ''
+        uses: actions/checkout@v7
+        with:
+          path: plugin
+
+      - name: "Download build artifact"
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: plugin
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+          tools: none
+
+      - name: "Install WordPress Coding Standards"
+        run: |
+          composer global config --no-interaction allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          packages="wp-coding-standards/wpcs dealerdirect/phpcodesniffer-composer-installer"
+          for attempt in 1 2 3; do
+            composer global require --no-interaction --quiet $packages && exit 0
+            echo "::warning::composer download failed (attempt ${attempt}), retrying"
+            sleep $((attempt * 15))
+          done
+          composer global require --no-interaction --quiet --prefer-source $packages
+
+      # WordPress' PrefixAllGlobals sniff: functions, classes, interfaces,
+      # traits, constants, namespaces and hook names must start with one of
+      # the prefixes (in any case: avpvh_flst also covers Avpvh_Flst_ and
+      # AVPVH_FLST_). Global variables are left out: template files share
+      # them with the code that includes them.
+      - name: "Check that global names carry the plugin's prefix"
+        env:
+          PREFIXES: ${{ inputs.prefixes }}
+        run: |
+          {
+            echo '<?xml version="1.0"?>'
+            echo '<ruleset name="Global prefix">'
+            echo '  <rule ref="WordPress.NamingConventions.PrefixAllGlobals">'
+            echo '    <properties><property name="prefixes" type="array">'
+            for prefix in $PREFIXES; do echo "      <element value=\"${prefix}\"/>"; done
+            echo '    </property></properties>'
+            echo '    <exclude name="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound"/>'
+            echo '  </rule>'
+            echo '</ruleset>'
+          } > "$RUNNER_TEMP/prefix.xml"
+          cat "$RUNNER_TEMP/prefix.xml"
+          "$(composer global config bin-dir --absolute)/phpcs" -p --colors --standard="$RUNNER_TEMP/prefix.xml" \
+            --extensions=php --ignore='*/vendor/*,*/node_modules/*,*/tests/*' plugin
 
   floor:
     name: "Declared PHP floor"
