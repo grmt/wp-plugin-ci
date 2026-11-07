@@ -202,11 +202,18 @@ jobs:
           coverage: none
           tools: none
 
+      # GitHub's zipball API sometimes answers 504 for minutes on end: retry,
+      # then fall back to cloning the packages instead of downloading zips.
       - name: "Install PHPCompatibilityWP"
         run: |
           composer global config --no-interaction allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
-          composer global require --no-interaction --quiet \
-            squizlabs/php_codesniffer phpcompatibility/phpcompatibility-wp dealerdirect/phpcodesniffer-composer-installer
+          packages="squizlabs/php_codesniffer phpcompatibility/phpcompatibility-wp dealerdirect/phpcodesniffer-composer-installer"
+          for attempt in 1 2 3; do
+            composer global require --no-interaction --quiet $packages && exit 0
+            echo "::warning::composer download failed (attempt ${attempt}), retrying"
+            sleep $((attempt * 15))
+          done
+          composer global require --no-interaction --quiet --prefer-source $packages
 
       - name: "Check compatibility with the PHP floor and later"
         run: |
