@@ -9,6 +9,7 @@ live in one place, [`plugin-checks.yml`](.github/workflows/plugin-checks.yml):
 
 | Job | What |
 |---|---|
+| Declared PHP floor | The plugin header's `Requires PHP` (required), `readme.txt`'s and `composer.json`'s `require.php` / `config.platform.php` (when present) all state `PHP_FLOOR`. Checked on the build when there is one. |
 | Dependencies on PHP floor | `composer check-platform-reqs --no-dev --lock`, if the plugin has a `composer.lock` |
 | PHP syntax | `php -l` on every PHP file, on the floor and the newest PHP |
 | PHP compatibility | PHPCS with PHPCompatibilityWP, `testVersion` floor and later |
