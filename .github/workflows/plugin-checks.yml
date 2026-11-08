@@ -127,6 +127,98 @@ jobs:
           "$(composer global config bin-dir --absolute)/phpcs" -p --colors --standard="$RUNNER_TEMP/prefix.xml" \
             --extensions=php --ignore='*/vendor/*,*/node_modules/*,*/tests/*' plugin
 
+  naming:
+    name: "Naming style"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        if: inputs.artifact == ''
+        uses: actions/checkout@v7
+        with:
+          path: plugin
+
+      - name: "Download build artifact"
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: plugin
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+          tools: none
+
+      # Functions, methods and properties: snake_case (WordPress) or camelCase
+      # (PSR). Classes, interfaces, traits and enums: Capitalised_Words or
+      # PascalCase. Never a mix within one name (eeSFL_UserCanSeeList).
+      # Magic methods are exempt; vendor/, node_modules/, tests/ and .phan/
+      # are skipped.
+      - name: "Check that names don't mix WordPress and PSR style"
+        run: |
+          cat > "$RUNNER_TEMP/naming.php" <<'PHP'
+          <?php
+          // Names must follow WordPress style or PSR style, never a mix within one name.
+          // Prints "file:line kind name" for each violation; exit 1 when there are any.
+          $fn  = '/^(?:[a-z][a-zA-Z0-9]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)$/';            // functions, methods, properties
+          $cls = '/^(?:[A-Z][a-zA-Z0-9]*|[A-Z][A-Za-z0-9]*(?:_[A-Z0-9][A-Za-z0-9]*)+)$/'; // classes, interfaces, traits, enums
+          $bad = 0;
+          $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator('plugin', FilesystemIterator::SKIP_DOTS));
+          foreach ($it as $f) {
+              $path = $f->getPathname();
+              if (substr($path, -4) !== '.php' || preg_match('#/(vendor|node_modules|tests?|\.phan)/#', $path)) { continue; }
+              $toks = token_get_all(file_get_contents($path));
+              $depth = 0; $classDepth = array(); $pending = false;
+              for ($i = 0, $n = count($toks); $i < $n; $i++) {
+                  $t = $toks[$i];
+                  if (!is_array($t)) {
+                      if ($t === '{') { $depth++; if ($pending) { $classDepth[] = $depth; $pending = false; } }
+                      if ($t === '}') { if ($classDepth && end($classDepth) === $depth) { array_pop($classDepth); } $depth--; }
+                      continue;
+                  }
+                  if (in_array($t[0], array(T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES), true)) { $depth++; continue; }
+                  $next = function ($j) use ($toks) { while (isset($toks[$j]) && is_array($toks[$j]) && in_array($toks[$j][0], array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT), true)) { $j++; } return $j; };
+                  $prev = function ($j) use ($toks) { while ($j >= 0 && is_array($toks[$j]) && in_array($toks[$j][0], array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT), true)) { $j--; } return $j; };
+                  $inClass = $classDepth && end($classDepth) === $depth;
+                  $kinds = array(T_CLASS => 'class', T_INTERFACE => 'interface', T_TRAIT => 'trait');
+                  if (defined('T_ENUM')) { $kinds[T_ENUM] = 'enum'; }
+                  if (isset($kinds[$t[0]])) {
+                      $p = $prev($i - 1);
+                      if ($p >= 0 && is_array($toks[$p]) && in_array($toks[$p][0], array(T_DOUBLE_COLON, T_NEW), true)) { continue; } // ::class, new class
+                      $j = $next($i + 1);
+                      if (is_array($toks[$j]) && $toks[$j][0] === T_STRING) {
+                          $pending = true;
+                          if (!preg_match($cls, $toks[$j][1])) { echo "::error file=" . substr($path, 7) . ",line={$toks[$j][2]}::{$kinds[$t[0]]} {$toks[$j][1]} mixes WordPress and PSR naming\n"; $bad++; }
+                      } elseif ($toks[$j] === '(' || $toks[$j] === '{') { $pending = true; }
+                      continue;
+                  }
+                  if ($t[0] === T_FUNCTION) {
+                      $j = $next($i + 1); if ($toks[$j] === '&') { $j = $next($j + 1); }
+                      if (is_array($toks[$j]) && $toks[$j][0] === T_STRING) {
+                          $name = $toks[$j][1];
+                          if (strpos($name, '__') === 0) { continue; } // magic methods
+                          if (!preg_match($fn, $name)) { echo "::error file=" . substr($path, 7) . ",line={$toks[$j][2]}::" . ($inClass ? 'method' : 'function') . " $name mixes WordPress and PSR naming\n"; $bad++; }
+                      }
+                      continue;
+                  }
+                  if ($inClass && $t[0] === T_VARIABLE) {
+                      // A property: a variable directly in the class body (not inside a method)
+                      $p = $prev($i - 1);
+                      $mods = array(T_PUBLIC, T_PROTECTED, T_PRIVATE, T_STATIC, T_VAR); if (defined('T_READONLY')) { $mods[] = T_READONLY; }
+                      if ($p >= 0 && (is_array($toks[$p]) && (in_array($toks[$p][0], $mods, true) || in_array($toks[$p][0], array(T_STRING, T_ARRAY, T_CALLABLE), true) || (defined('T_NAME_QUALIFIED') && in_array($toks[$p][0], array(T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED), true))) || $toks[$p] === '?' || $toks[$p] === ',')) {
+                          $name = substr($t[1], 1);
+                          if (!preg_match($fn, $name)) { echo "::error file=" . substr($path, 7) . ",line={$t[2]}::property $name mixes WordPress and PSR naming\n"; $bad++; }
+                      }
+                  }
+              }
+          }
+          fwrite(STDERR, "$bad name(s) mix WordPress and PSR style\n");
+          exit($bad ? 1 : 0);
+          PHP
+          php "$RUNNER_TEMP/naming.php"
+
   floor:
     name: "Declared PHP floor"
     runs-on: ubuntu-latest
