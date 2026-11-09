@@ -154,8 +154,9 @@ jobs:
       # Functions, methods and properties: snake_case (WordPress) or camelCase
       # (PSR). Classes, interfaces, traits and enums: Capitalised_Words or
       # PascalCase. Never a mix within one name (eeSFL_UserCanSeeList).
-      # Magic methods are exempt; vendor/, node_modules/, tests/ and .phan/
-      # are skipped.
+      # Magic methods and a property named ID (WordPress's own spelling, as in
+      # WP_Post::$ID and the ID column) are exempt; vendor/, node_modules/,
+      # tests/ and .phan/ are skipped.
       - name: "Check that names don't mix WordPress and PSR style"
         run: |
           cat > "$RUNNER_TEMP/naming.php" <<'PHP'
@@ -209,7 +210,7 @@ jobs:
                       $mods = array(T_PUBLIC, T_PROTECTED, T_PRIVATE, T_STATIC, T_VAR); if (defined('T_READONLY')) { $mods[] = T_READONLY; }
                       if ($p >= 0 && (is_array($toks[$p]) && (in_array($toks[$p][0], $mods, true) || in_array($toks[$p][0], array(T_STRING, T_ARRAY, T_CALLABLE), true) || (defined('T_NAME_QUALIFIED') && in_array($toks[$p][0], array(T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED), true))) || $toks[$p] === '?' || $toks[$p] === ',')) {
                           $name = substr($t[1], 1);
-                          if (!preg_match($fn, $name)) { echo "::error file=" . substr($path, 7) . ",line={$t[2]}::property $name mixes WordPress and PSR naming\n"; $bad++; }
+                          if ($name !== 'ID' && !preg_match($fn, $name)) { echo "::error file=" . substr($path, 7) . ",line={$t[2]}::property $name mixes WordPress and PSR naming\n"; $bad++; } // ID: WordPress's own spelling (WP_Post::$ID, the ID column)
                       }
                   }
               }
