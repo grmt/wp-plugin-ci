@@ -11,7 +11,7 @@ live in one place, [`plugin-checks.yml`](.github/workflows/plugin-checks.yml):
 |---|---|
 | Declared PHP floor | The plugin header's `Requires PHP` (required), `readme.txt`'s and `composer.json`'s `require.php` / `config.platform.php` (when present) all state `PHP_FLOOR`. Checked on the build when there is one. |
 | Global prefix | Only with the `prefixes` input: WordPress' `PrefixAllGlobals` sniff, so functions, classes, constants, namespaces and hook names start with one of the prefixes (global variables excepted). Checked on the build when there is one. |
-| Naming style | Functions, methods and properties follow WordPress (`snake_case`) or PSR (`camelCase`) style, classes `Capitalised_Words` or `PascalCase`, never a mix within one name. Magic methods exempt; `vendor/`, `node_modules/`, `tests/`, `.phan/` skipped. Checked on the build when there is one. |
+| Naming style | Functions, methods and properties follow WordPress (`snake_case`) or PSR (`camelCase`) style, classes `Capitalised_Words` or `PascalCase`, never a mix within one name. Magic methods and a property named `ID` (WordPress's own spelling, as in `WP_Post::$ID`) exempt; `vendor/`, `node_modules/`, `tests/`, `.phan/` skipped. Checked on the build when there is one. |
 | Dependencies on PHP floor | `composer check-platform-reqs --no-dev --lock`, if the plugin has a `composer.lock` |
 | PHP syntax | `php -l` on every PHP file, on the floor and the newest PHP |
 | PHP compatibility | PHPCS with PHPCompatibilityWP, `testVersion` floor and later |
