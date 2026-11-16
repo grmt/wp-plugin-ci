@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: ""
+      phpstan-level:
+        description: "PHPStan rule level (0-10). Empty: the PHPStan check is skipped."
+        required: false
+        type: string
+        default: "3"
 
 env:
   PHP_FLOOR: "8.4"
@@ -378,6 +383,124 @@ jobs:
           "$(composer global config bin-dir --absolute)/phpcs" -p --colors \
             --standard=PHPCompatibilityWP --runtime-set testVersion "${PHP_FLOOR}-" \
             --extensions=php --ignore='*/vendor/*,*/node_modules/*,*/dist/*' .
+
+  phpstan:
+    name: "PHPStan (level ${{ inputs.phpstan-level }})"
+    if: inputs.phpstan-level != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ env.PHP_FLOOR }}
+          coverage: none
+          tools: none
+
+      - name: "Install runtime Composer dependencies"
+        if: hashFiles('composer.json') != '' && hashFiles('vendor/autoload.php') == ''
+        run: composer install -n --prefer-dist --no-dev
+
+      - name: "Install PHPStan for WordPress"
+        run: |
+          packages="szepeviktor/phpstan-wordpress"
+          for attempt in 1 2 3; do
+            composer global require --no-interaction --quiet $packages && exit 0
+            echo "::warning::composer download failed (attempt ${attempt}), retrying"
+            sleep $((attempt * 15))
+          done
+          composer global require --no-interaction --quiet --prefer-source $packages
+
+      - name: "Run PHPStan"
+        env:
+          PHPSTAN_LEVEL: ${{ inputs.phpstan-level }}
+        run: |
+          GLOBAL_VENDOR="$(composer global config vendor-dir --absolute)"
+          GLOBAL_BIN="$(composer global config bin-dir --absolute)"
+
+          # If a plugin's phpstan.neon(.dist) references vendor/szepeviktor/phpstan-wordpress,
+          # expose the globally installed extension and stubs without installing dev packages.
+          if [ ! -e vendor/szepeviktor/phpstan-wordpress ]; then
+            mkdir -p vendor/szepeviktor
+            ln -s "$GLOBAL_VENDOR/szepeviktor/phpstan-wordpress" vendor/szepeviktor/phpstan-wordpress
+          fi
+          if [ ! -e vendor/php-stubs/wordpress-stubs ]; then
+            mkdir -p vendor/php-stubs
+            ln -s "$GLOBAL_VENDOR/php-stubs/wordpress-stubs" vendor/php-stubs/wordpress-stubs
+          fi
+
+          cat > "$RUNNER_TEMP/phpstan-autoload.php" <<'PHP'
+          <?php
+          $globalVendor = getenv('GLOBAL_VENDOR');
+          if ($globalVendor && is_file($globalVendor . '/autoload.php')) {
+              require_once $globalVendor . '/autoload.php';
+          }
+          if (is_file(getcwd() . '/vendor/autoload.php')) {
+              $localLoader = require getcwd() . '/vendor/autoload.php';
+              if ($localLoader instanceof \Composer\Autoload\ClassLoader && $globalVendor && is_dir($globalVendor . '/szepeviktor/phpstan-wordpress/src')) {
+                  $localLoader->addPsr4('SzepeViktor\\PHPStan\\WordPress\\', $globalVendor . '/szepeviktor/phpstan-wordpress/src/');
+              }
+          }
+          if (is_file(getcwd() . '/phpstan-bootstrap.php')) {
+              require_once getcwd() . '/phpstan-bootstrap.php';
+          }
+          $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(getcwd(), FilesystemIterator::SKIP_DOTS));
+          foreach ($it as $f) {
+              $path = $f->getPathname();
+              if (substr($path, -4) !== '.php' || preg_match('#/(vendor|node_modules|dist|tests?|\.git|\.phan)/#', $path)) {
+                  continue;
+              }
+              $code = @file_get_contents($path);
+              if ($code === false || strpos($code, 'define') === false) {
+                  continue;
+              }
+              if (preg_match_all('/\bdefine\s*\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]\s*,\s*([^)]+)\)/', $code, $m, PREG_SET_ORDER)) {
+                  foreach ($m as $match) {
+                      $name = $match[1];
+                      if (defined($name)) {
+                          continue;
+                      }
+                      $valExpr = trim($match[2]);
+                      if (preg_match('/^(?:true|false|null|-?\d+(?:\.\d+)?|[\'"][^\'"]*[\'"])$/i', $valExpr)) {
+                          @eval("define('$name', $valExpr);");
+                      } else {
+                          define($name, '');
+                      }
+                  }
+              }
+          }
+          PHP
+
+          CONFIG_ARGS=()
+          if [ ! -f phpstan.neon ] && [ ! -f phpstan.neon.dist ]; then
+            cat > "$RUNNER_TEMP/phpstan.neon" <<NEON
+          includes:
+              - ${GLOBAL_VENDOR}/szepeviktor/phpstan-wordpress/extension.neon
+          parameters:
+              level: ${PHPSTAN_LEVEL}
+              universalObjectCratesClasses:
+                  - WP_Post
+              paths:
+                  - .
+              excludePaths:
+                  analyseAndScan:
+                      - vendor (?)
+                      - node_modules (?)
+                      - dist (?)
+                      - tests (?)
+                      - test (?)
+                      - .phan (?)
+          NEON
+            CONFIG_ARGS=(-c "$RUNNER_TEMP/phpstan.neon")
+          fi
+
+          GLOBAL_VENDOR="$GLOBAL_VENDOR" "$GLOBAL_BIN/phpstan" analyze \
+            "${CONFIG_ARGS[@]}" \
+            -a "$RUNNER_TEMP/phpstan-autoload.php" \
+            -l "$PHPSTAN_LEVEL" \
+            --no-progress
 
   plugin-check:
     name: "Plugin check"

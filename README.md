@@ -15,6 +15,7 @@ live in one place, [`plugin-checks.yml`](.github/workflows/plugin-checks.yml):
 | Dependencies on PHP floor | `composer check-platform-reqs --no-dev --lock`, if the plugin has a `composer.lock` |
 | PHP syntax | `php -l` on every PHP file, on the floor and the newest PHP |
 | PHP compatibility | PHPCS with PHPCompatibilityWP, `testVersion` floor and later |
+| PHPStan | Static analysis with `szepeviktor/phpstan-wordpress` at `phpstan-level` (default `3`) on the floor PHP |
 | Plugin check | [WordPress Plugin Check](https://github.com/WordPress/plugin-check-action) on the floor PHP |
 
 `vendor/`, `node_modules/` and `dist/` are skipped by the syntax and
@@ -58,5 +59,6 @@ Inputs:
 - `ignore-codes`, `exclude-checks`, `exclude-files`, `exclude-directories`:
   passed to Plugin Check, one per line.
 - `prefixes`: the prefixes global names must carry, one per line, e.g. `avpvh_flst` (see the naming convention in the plugins' shared CLAUDE.md). Without it the prefix check is skipped.
+- `phpstan-level`: the PHPStan rule level (`0`–`10`), default `3`. Pass `""` to skip the PHPStan check.
 - `extra-plugins`: other public plugin repos (`owner/repo`, main branch)
   installed next to this one, e.g. a plugin this one depends on.
