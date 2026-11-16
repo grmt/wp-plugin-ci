@@ -53,7 +53,7 @@ on:
         description: "PHPStan rule level (0-10). Empty: the PHPStan check is skipped."
         required: false
         type: string
-        default: "3"
+        default: "8"
 
 env:
   PHP_FLOOR: "8.4"
@@ -392,6 +392,13 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v7
 
+      - name: "Download build artifact"
+        if: inputs.artifact != '' && hashFiles('config/phpstan.neon') != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist
+
       - name: "Setup PHP"
         uses: shivammathur/setup-php@2.40.0
         with:
@@ -474,7 +481,9 @@ jobs:
           PHP
 
           CONFIG_ARGS=()
-          if [ ! -f phpstan.neon ] && [ ! -f phpstan.neon.dist ]; then
+          if [ -f config/phpstan.neon ]; then
+            CONFIG_ARGS=(-c config/phpstan.neon)
+          elif [ ! -f phpstan.neon ] && [ ! -f phpstan.neon.dist ]; then
             cat > "$RUNNER_TEMP/phpstan.neon" <<NEON
           includes:
               - ${GLOBAL_VENDOR}/szepeviktor/phpstan-wordpress/extension.neon
