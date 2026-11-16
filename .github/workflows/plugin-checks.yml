@@ -440,20 +440,24 @@ jobs:
 
           cat > "$RUNNER_TEMP/phpstan-autoload.php" <<'PHP'
           <?php
+          $root = getcwd();
+          if ($root === false) {
+              return;
+          }
           $globalVendor = getenv('GLOBAL_VENDOR');
           if ($globalVendor && is_file($globalVendor . '/autoload.php')) {
               require_once $globalVendor . '/autoload.php';
           }
-          if (is_file(getcwd() . '/vendor/autoload.php')) {
-              $localLoader = require getcwd() . '/vendor/autoload.php';
+          if (is_file($root . '/vendor/autoload.php')) {
+              $localLoader = require $root . '/vendor/autoload.php';
               if ($localLoader instanceof \Composer\Autoload\ClassLoader && $globalVendor && is_dir($globalVendor . '/szepeviktor/phpstan-wordpress/src')) {
                   $localLoader->addPsr4('SzepeViktor\\PHPStan\\WordPress\\', $globalVendor . '/szepeviktor/phpstan-wordpress/src/');
               }
           }
-          if (is_file(getcwd() . '/phpstan-bootstrap.php')) {
-              require_once getcwd() . '/phpstan-bootstrap.php';
+          if (is_file($root . '/phpstan-bootstrap.php')) {
+              require_once $root . '/phpstan-bootstrap.php';
           }
-          $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(getcwd(), FilesystemIterator::SKIP_DOTS));
+          $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
           foreach ($it as $f) {
               $path = $f->getPathname();
               if (substr($path, -4) !== '.php' || preg_match('#/(vendor|node_modules|dist|tests?|\.git|\.phan)/#', $path)) {
