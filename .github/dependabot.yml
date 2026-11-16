@@ -5,6 +5,10 @@ updates:
   groups:
     actions:
       update-types: [minor, patch]
+    # Security updates bundled into one PR, majors included.
+    actions-security:
+      applies-to: security-updates
+      patterns: ["*"]
   schedule:
     interval: weekly
   assignees:
