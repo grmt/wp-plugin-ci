@@ -71,7 +71,7 @@ Inputs:
 | Job | What |
 |---|---|
 | PHPUnit | `vendor/bin/phpunit` from the repo's own `composer.json` and `phpunit.xml.dist`, on the floor and the newest PHP. Coverage (pcov, Clover) on the floor, uploaded to Codecov over OIDC. A failed upload doesn't fail CI. |
-| SonarQube Cloud | CI-based analysis, with the coverage when PHPUnit ran. Project key `<owner>_<repo>`, organisation `<owner>`. Skipped, with a notice, when the repo has no `SONAR_TOKEN` secret. That includes forks and Dependabot's pull requests, which get no secrets. |
+| SonarQube Cloud | CI-based analysis, with the coverage when PHPUnit ran. Project key `<owner>_<repo>`, name `<repo>`, organisation `<owner>`. After a repo rename, change the key in SonarQube Cloud (project Administration → Update Key); the name follows on the next analysis. Skipped, with a notice, when the repo has no `SONAR_TOKEN` secret. That includes forks and Dependabot's pull requests, which get no secrets. |
 
 It is a separate file because Codecov's OIDC upload needs `id-token: write`. GitHub checks a called workflow's permissions when the run starts, skipped jobs included. Asking for that permission in `plugin-checks.yml` would fail every caller that doesn't grant it.
 
