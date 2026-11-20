@@ -1,0 +1,179 @@
+name: "Tests and quality"
+
+# Unit tests, coverage and SonarQube Cloud, shared by the own WordPress
+# plugins. Called next to plugin-checks.yml:
+#
+#   quality:
+#     uses: grmt/wp-plugin-ci/.github/workflows/quality.yml@main
+#     permissions:
+#       contents: read
+#       id-token: write   # Codecov upload over OIDC, no token secret
+#     secrets: inherit    # SONAR_TOKEN, when the repo has it
+#
+# A separate file from plugin-checks.yml because of id-token: GitHub checks a
+# called workflow's permissions when the run starts, skipped jobs included,
+# so asking for it there would fail every caller that doesn't grant it.
+on:
+  workflow_call:
+    inputs:
+      phpunit:
+        description: "Run vendor/bin/phpunit (from the repo's composer.json) on the floor and the newest PHP, with coverage on the floor."
+        required: false
+        type: boolean
+        default: true
+      sonar-exclusions:
+        description: "Comma-separated paths SonarQube Cloud skips, on top of vendor, node_modules, dist and the tests directory."
+        required: false
+        type: string
+        default: ""
+      tests-directory:
+        description: "Directory with the tests, analysed by SonarQube Cloud as test code."
+        required: false
+        type: string
+        default: "tests"
+    secrets:
+      SONAR_TOKEN:
+        description: "SonarQube Cloud token. Without it the SonarQube Cloud job is skipped."
+        required: false
+
+# Keep in step with PHP_FLOOR and PHP_NEWEST in plugin-checks.yml.
+env:
+  PHP_FLOOR: "8.4"
+  PHP_NEWEST: "8.5"
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: "PHP versions"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.versions.outputs.matrix }}
+      floor: ${{ steps.versions.outputs.floor }}
+    steps:
+      - id: versions
+        run: |
+          echo "matrix=[\"${PHP_FLOOR}\", \"${PHP_NEWEST}\"]" >> "$GITHUB_OUTPUT"
+          echo "floor=${PHP_FLOOR}" >> "$GITHUB_OUTPUT"
+
+  phpunit:
+    name: "PHPUnit (PHP ${{ matrix.php }})"
+    if: inputs.phpunit
+    needs: versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    env:
+      COVERAGE: ${{ matrix.php == needs.versions.outputs.floor }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup PHP"
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: ${{ matrix.php == needs.versions.outputs.floor && 'pcov' || 'none' }}
+
+      - name: "Install Composer dependencies"
+        run: composer install -n --prefer-dist --no-progress
+
+      - name: "PHPUnit"
+        run: |
+          if [ "$COVERAGE" = "true" ]; then
+            vendor/bin/phpunit --coverage-clover coverage.xml
+          else
+            vendor/bin/phpunit
+          fi
+
+      # Informational: a failed upload doesn't fail CI. Dependabot's pull
+      # requests may get no OIDC token.
+      - name: "Upload coverage to Codecov"
+        if: env.COVERAGE == 'true'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          use_oidc: true
+          files: coverage.xml
+          fail_ci_if_error: false
+
+      - name: "Keep coverage for SonarQube Cloud"
+        if: env.COVERAGE == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-clover
+          path: coverage.xml
+          retention-days: 1
+
+  sonar:
+    name: "SonarQube Cloud"
+    needs: phpunit
+    # Also when PHPUnit is off (skipped); not when the tests failed.
+    if: ${{ !cancelled() && needs.phpunit.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Forks and Dependabot's pull requests get no secrets: skip, don't fail.
+      - name: "Check for SONAR_TOKEN"
+        id: token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::notice::No SONAR_TOKEN secret: SonarQube Cloud analysis skipped."
+            echo "SonarQube Cloud analysis skipped: no \`SONAR_TOKEN\` secret." >> "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Checkout"
+        if: steps.token.outputs.run == 'true'
+        uses: actions/checkout@v7
+        with:
+          # Full history: SonarQube Cloud uses blame for new-code detection.
+          fetch-depth: 0
+
+      - name: "Download coverage"
+        if: steps.token.outputs.run == 'true' && needs.phpunit.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-clover
+
+      - name: "Analysis settings"
+        if: steps.token.outputs.run == 'true'
+        id: settings
+        env:
+          TESTS: ${{ inputs.tests-directory }}
+          EXTRA_EXCLUSIONS: ${{ inputs.sonar-exclusions }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          exclusions="vendor/**,node_modules/**,dist/**"
+          [ -n "$EXTRA_EXCLUSIONS" ] && exclusions="${exclusions},${EXTRA_EXCLUSIONS}"
+          {
+            echo "sonar.organization=${OWNER}"
+            echo "sonar.projectKey=${OWNER}_${REPO}"
+            echo "sonar.sources=."
+            if [ -n "$TESTS" ] && [ -d "$TESTS" ]; then
+              echo "sonar.tests=${TESTS}"
+              exclusions="${exclusions},${TESTS}/**"
+            fi
+            echo "sonar.exclusions=${exclusions}"
+            [ -f coverage.xml ] && echo "sonar.php.coverage.reportPaths=coverage.xml"
+          } > "$RUNNER_TEMP/sonar.properties"
+          cat "$RUNNER_TEMP/sonar.properties"
+          echo "file=$RUNNER_TEMP/sonar.properties" >> "$GITHUB_OUTPUT"
+
+      - name: "SonarQube Cloud scan"
+        if: steps.token.outputs.run == 'true'
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dproject.settings=${{ steps.settings.outputs.file }}

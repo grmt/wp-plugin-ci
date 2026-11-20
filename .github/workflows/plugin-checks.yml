@@ -583,3 +583,58 @@ jobs:
           exclude-directories: ${{ inputs.exclude-directories }}
           exclude-files: ${{ inputs.exclude-files }}
           exclude-checks: ${{ inputs.exclude-checks }}
+
+  conventions:
+    name: "Repo conventions"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      # Dependabot can't be set up from a workflow, so check its config here:
+      # present, an entry per ecosystem the repo uses, weekly, and minor and
+      # patch updates grouped into one PR per ecosystem (majors separate).
+      - name: "Dependabot config"
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import os, sys, yaml
+
+          path = ".github/dependabot.yml"
+          if not os.path.exists(path) and os.path.exists(".github/dependabot.yaml"):
+              path = ".github/dependabot.yaml"
+          if not os.path.exists(path):
+              print("::error file=.github/dependabot.yml::No Dependabot config. Add .github/dependabot.yml with a weekly entry per ecosystem (github-actions, composer, npm).")
+              sys.exit(1)
+
+          config = yaml.safe_load(open(path)) or {}
+          updates = config.get("updates") or []
+          errors = []
+
+          needed = {"github-actions": os.path.isdir(".github/workflows"),
+                    "composer": os.path.exists("composer.json"),
+                    "npm": os.path.exists("package.json")}
+          have = {u.get("package-ecosystem") for u in updates if u.get("directory", "/") in ("/", "")}
+          for ecosystem, used in needed.items():
+              if used and ecosystem not in have:
+                  errors.append(f"no entry for {ecosystem} (directory \"/\")")
+
+          for u in updates:
+              name = f'{u.get("package-ecosystem")} {u.get("directory", "/")}'
+              interval = (u.get("schedule") or {}).get("interval")
+              if interval != "weekly":
+                  errors.append(f"{name}: schedule is {interval!r}, not weekly")
+              grouped = any(
+                  {"minor", "patch"} <= set(g.get("update-types") or [])
+                  and g.get("applies-to", "version-updates") == "version-updates"
+                  for g in (u.get("groups") or {}).values()
+              )
+              if not grouped:
+                  errors.append(f"{name}: no group with update-types [minor, patch], so every update is its own PR")
+
+          for e in errors:
+              print(f"::error file={path}::{e}")
+          if errors:
+              sys.exit(1)
+          print(f"{path}: {len(updates)} entries, all weekly with minor and patch grouped")
+          PY
