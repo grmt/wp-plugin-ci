@@ -90,6 +90,7 @@ Inputs:
 - `phpunit` (default `true`): set `false` for a repo without PHPUnit tests. SonarQube Cloud still runs.
 - `tests-directory` (default `tests`): analysed as test code when it exists.
 - `sonar-exclusions`: comma-separated paths to skip, on top of `vendor`, `node_modules`, `dist` and the tests.
+- A `.sonarcloud.properties` in the repo (the file Automatic Analysis reads) is added after the generated settings, so rule exceptions (`sonar.issue.ignore.multicriteria…`) and test inclusions carry over when a repo moves to CI-based analysis. A key set there replaces the generated one: a `sonar.exclusions` there must list `vendor/**` itself.
 
 A repo also needs:
 
