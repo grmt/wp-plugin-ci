@@ -168,6 +168,14 @@ jobs:
             fi
             echo "sonar.exclusions=${exclusions}"
             [ -f coverage.xml ] && echo "sonar.php.coverage.reportPaths=coverage.xml"
+            # The repo's own settings (rule exceptions, test inclusions),
+            # the file Automatic Analysis reads. Last, so a key set there
+            # replaces the generated one.
+            if [ -f .sonarcloud.properties ]; then
+              echo "# --- .sonarcloud.properties"
+              cat .sonarcloud.properties
+              echo
+            fi
           } > "$RUNNER_TEMP/sonar.properties"
           cat "$RUNNER_TEMP/sonar.properties"
           echo "file=$RUNNER_TEMP/sonar.properties" >> "$GITHUB_OUTPUT"
