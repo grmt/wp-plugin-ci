@@ -158,6 +158,9 @@ jobs:
           {
             echo "sonar.organization=${OWNER}"
             echo "sonar.projectKey=${OWNER}_${REPO}"
+            # The name follows the repo, also after a rename: SonarQube Cloud
+            # can't edit it in its interface.
+            echo "sonar.projectName=${REPO}"
             echo "sonar.sources=."
             if [ -n "$TESTS" ] && [ -d "$TESTS" ]; then
               echo "sonar.tests=${TESTS}"
