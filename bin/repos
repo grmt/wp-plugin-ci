@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# The owner's repositories whose workflows call the shared checks of
+# grmt/wp-plugin-ci, one per line. Used by the other scripts in bin/.
+set -euo pipefail
+owner=${OWNER:-grmt}
+gh repo list "$owner" --no-archived --limit 200 --json name --jq '.[].name' | while read -r repo; do
+  [ "$repo" = wp-plugin-ci ] && continue
+  files=$(gh api "repos/$owner/$repo/contents/.github/workflows" --jq '.[].path' 2>/dev/null </dev/null) || continue
+  for f in $files; do
+    # Read it whole first: grep -q stops early, and with pipefail the
+    # SIGPIPE that gives base64 on a longer file would count as no match.
+    content=$(gh api "repos/$owner/$repo/contents/$f" --jq .content 2>/dev/null </dev/null | base64 -d 2>/dev/null) || continue
+    if grep -q 'grmt/wp-plugin-ci/' <<<"$content"; then
+      echo "$owner/$repo"
+      break
+    fi
+  done
+done

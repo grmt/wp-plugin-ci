@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Repository settings a workflow can't see (they need an admin token):
+# Dependabot alerts and security updates on, and the SONAR_TOKEN secret
+# present for "Tests and quality". Usage: bin/check-repo-settings [owner/repo ...]
+# Without arguments: every repo that calls the shared checks. --fix turns the
+# Dependabot settings on (it never touches secrets).
+set -euo pipefail
+cd "$(dirname "$0")"
+fix=false
+[ "${1:-}" = --fix ] && { fix=true; shift; }
+repos=("$@")
+[ ${#repos[@]} -eq 0 ] && mapfile -t repos < <(./repos)
+status=0
+for r in "${repos[@]}"; do
+  alerts=$(gh api "repos/$r/vulnerability-alerts" --silent 2>/dev/null </dev/null && echo on || echo off)
+  fixes=$(gh api "repos/$r/automated-security-fixes" --jq 'if .enabled then "on" else "off" end' 2>/dev/null </dev/null || echo off)
+  secrets=$(gh secret list -R "$r" --json name --jq '.[].name' 2>/dev/null </dev/null || true)
+  sonar=$(grep -qx SONAR_TOKEN <<<"$secrets" && echo yes || echo no)
+  workflows=$(gh api "repos/$r/contents/.github/workflows" --jq '.[].path' 2>/dev/null </dev/null | while read -r f; do gh api "repos/$r/contents/$f" --jq .content </dev/null | base64 -d; done)
+  quality=$(grep -q 'wp-plugin-ci/.github/workflows/quality.yml' <<<"$workflows" && echo yes || echo no)
+  printf '%-40s alerts %-3s  security-updates %-3s  quality.yml %-3s  SONAR_TOKEN %s\n' "$r" "$alerts" "$fixes" "$quality" "$sonar"
+  if [ "$alerts" = off ] || [ "$fixes" = off ]; then
+    if $fix; then
+      gh api -X PUT "repos/$r/vulnerability-alerts" --silent
+      gh api -X PUT "repos/$r/automated-security-fixes" --silent
+      echo "  -> Dependabot alerts and security updates turned on"
+    else
+      status=1
+    fi
+  fi
+  if [ "$quality" = yes ] && [ "$sonar" = no ]; then
+    echo "  -> calls quality.yml but has no SONAR_TOKEN: SonarQube Cloud is skipped (bin/set-sonar-token $r)"
+  fi
+done
+exit $status

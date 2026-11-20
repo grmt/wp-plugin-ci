@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Store a SonarQube Cloud token as the SONAR_TOKEN Actions secret.
+# grmt is a user account, so there are no organisation secrets: each repo
+# needs its own. Usage: bin/set-sonar-token [owner/repo ...]
+# Without arguments: every repo that calls the shared checks.
+# The token is read from the terminal and passed to gh on stdin, so it never
+# shows up in the shell history, the process list or the output.
+set -euo pipefail
+cd "$(dirname "$0")"
+repos=("$@")
+[ ${#repos[@]} -eq 0 ] && mapfile -t repos < <(./repos)
+read -r -s -p "SonarQube Cloud token (My Account > Security): " token
+echo
+[ -n "$token" ] || { echo "No token given." >&2; exit 1; }
+for r in "${repos[@]}"; do
+  printf '%s' "$token" | gh secret set SONAR_TOKEN -R "$r" --app actions
+  echo "$r: SONAR_TOKEN set"
+done
+unset token
