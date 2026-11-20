@@ -182,6 +182,8 @@ jobs:
         run: |
           mkdir -p "$WP_CORE_DIR"
           curl -fsSL "https://wordpress.org/wordpress-${WP_VERSION}.tar.gz" | tar -xz --strip-components=1 -C "$WP_CORE_DIR"
+          # The tarball has no uploads directory; the test suite cleans it up between tests.
+          mkdir -p "$WP_CORE_DIR/wp-content/uploads"
           git clone -q --depth 1 --branch "$WP_VERSION" --filter=blob:none --sparse \
             https://github.com/WordPress/wordpress-develop.git ../wordpress-tests
           git -C ../wordpress-tests sparse-checkout set tests/phpunit/includes tests/phpunit/data
