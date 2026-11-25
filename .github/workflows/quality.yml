@@ -31,6 +31,21 @@ on:
         required: false
         type: string
         default: "tests"
+      pytest:
+        description: "Also run pytest for the repo's Python scripts, with coverage passed to SonarQube Cloud."
+        required: false
+        type: boolean
+        default: false
+      python-requirements:
+        description: "pip requirements file installed before pytest (pytest and pytest-cov are always installed)."
+        required: false
+        type: string
+        default: ""
+      python-coverage-source:
+        description: "Directory pytest-cov measures."
+        required: false
+        type: string
+        default: "."
     secrets:
       SONAR_TOKEN:
         description: "SonarQube Cloud token. Without it the SonarQube Cloud job is skipped."
@@ -40,6 +55,7 @@ on:
 env:
   PHP_FLOOR: "8.4"
   PHP_NEWEST: "8.5"
+  PYTHON_VERSION: "3.13"
 
 permissions:
   contents: read
@@ -110,11 +126,45 @@ jobs:
           path: coverage.xml
           retention-days: 1
 
+  pytest:
+    name: "pytest"
+    if: inputs.pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: "Install"
+        env:
+          REQUIREMENTS: ${{ inputs.python-requirements }}
+        run: |
+          python -m pip install --quiet pytest pytest-cov
+          if [ -n "$REQUIREMENTS" ]; then
+            python -m pip install --quiet -r "$REQUIREMENTS"
+          fi
+
+      - name: "pytest"
+        env:
+          COV_SOURCE: ${{ inputs.python-coverage-source }}
+        run: python -m pytest --cov="$COV_SOURCE" --cov-report=xml:coverage-python.xml --cov-report=term
+
+      - name: "Keep coverage for SonarQube Cloud"
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-python
+          path: coverage-python.xml
+          retention-days: 1
+
   sonar:
     name: "SonarQube Cloud"
-    needs: phpunit
-    # Also when PHPUnit is off (skipped); not when the tests failed.
-    if: ${{ !cancelled() && needs.phpunit.result != 'failure' }}
+    needs: [phpunit, pytest]
+    # Also when PHPUnit or pytest is off (skipped); not when tests failed.
+    if: ${{ !cancelled() && needs.phpunit.result != 'failure' && needs.pytest.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       # Forks and Dependabot's pull requests get no secrets: skip, don't fail.
@@ -144,6 +194,12 @@ jobs:
         with:
           name: coverage-clover
 
+      - name: "Download Python coverage"
+        if: steps.token.outputs.run == 'true' && needs.pytest.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-python
+
       - name: "Analysis settings"
         if: steps.token.outputs.run == 'true'
         id: settings
@@ -168,6 +224,10 @@ jobs:
             fi
             echo "sonar.exclusions=${exclusions}"
             [ -f coverage.xml ] && echo "sonar.php.coverage.reportPaths=coverage.xml"
+            if [ -f coverage-python.xml ]; then
+              echo "sonar.python.coverage.reportPaths=coverage-python.xml"
+              echo "sonar.python.version=${PYTHON_VERSION}"
+            fi
             # The repo's own settings (rule exceptions, test inclusions),
             # the file Automatic Analysis reads. Last, so a key set there
             # replaces the generated one.
