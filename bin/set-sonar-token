@@ -9,9 +9,24 @@ set -euo pipefail
 cd "$(dirname "$0")"
 repos=("$@")
 [ ${#repos[@]} -eq 0 ] && mapfile -t repos < <(./repos)
-read -r -s -p "SonarQube Cloud token (My Account > Security): " token
-echo
-[ -n "$token" ] || { echo "No token given." >&2; exit 1; }
+# From the terminal when there is one, else from stdin (for example
+# `bin/set-sonar-token < token.txt`). Claude Code's `!` prefix has neither.
+token=
+if [ -t 0 ]; then
+  read -r -s -p "SonarQube Cloud token (My Account > Security): " token || true
+  echo
+elif [ -p /dev/stdin ] || [ -f /dev/stdin ]; then
+  read -r token || true
+elif { exec 3</dev/tty; } 2>/dev/null; then
+  read -r -s -p "SonarQube Cloud token (My Account > Security): " token <&3 || true
+  echo
+  exec 3<&-
+fi
+if [ -z "$token" ]; then
+  echo "No token read. Run this in a terminal of your own, or pass the token on stdin:" >&2
+  echo "  $0 ${repos[*]} < token.txt" >&2
+  exit 1
+fi
 for r in "${repos[@]}"; do
   printf '%s' "$token" | gh secret set SONAR_TOKEN -R "$r" --app actions
   echo "$r: SONAR_TOKEN set"
