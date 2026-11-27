@@ -36,6 +36,31 @@ on:
         required: false
         type: string
         default: "tests"
+      pytest:
+        description: "Also run pytest for the repo's Python scripts, with coverage passed to SonarQube Cloud."
+        required: false
+        type: boolean
+        default: false
+      python-requirements:
+        description: "pip requirements file installed before pytest (pytest and pytest-cov are always installed)."
+        required: false
+        type: string
+        default: ""
+      python-coverage-source:
+        description: "Directory pytest-cov measures."
+        required: false
+        type: string
+        default: "."
+      vitest:
+        description: "Also run Vitest (from the repo's package.json) with coverage passed to Codecov and SonarQube Cloud. The repo needs vitest and @vitest/coverage-v8 as devDependencies."
+        required: false
+        type: boolean
+        default: false
+      node-version:
+        description: "Node.js version for the Vitest job."
+        required: false
+        type: string
+        default: "24"
     secrets:
       SONAR_TOKEN:
         description: "SonarQube Cloud token. Without it the SonarQube Cloud job is skipped."
@@ -47,6 +72,7 @@ env:
   PHP_FLOOR: "8.4"
   PHP_NEWEST: "8.5"
   WP_FLOOR: "7.1"
+  PYTHON_VERSION: "3.13"
 
 permissions:
   contents: read
@@ -221,11 +247,86 @@ jobs:
           path: coverage-wordpress.xml
           retention-days: 1
 
+  pytest:
+    name: "pytest"
+    if: inputs.pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: "Install"
+        env:
+          REQUIREMENTS: ${{ inputs.python-requirements }}
+        run: |
+          python -m pip install --quiet pytest pytest-cov
+          if [ -n "$REQUIREMENTS" ]; then
+            python -m pip install --quiet -r "$REQUIREMENTS"
+          fi
+
+      - name: "pytest"
+        env:
+          COV_SOURCE: ${{ inputs.python-coverage-source }}
+        run: python -m pytest --cov="$COV_SOURCE" --cov-report=xml:coverage-python.xml --cov-report=term
+
+      - name: "Keep coverage for SonarQube Cloud"
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-python
+          path: coverage-python.xml
+          retention-days: 1
+
+  vitest:
+    name: "Vitest"
+    if: inputs.vitest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: "Install"
+        run: npm ci --ignore-scripts
+
+      # lcov for Codecov and SonarQube Cloud; the repo's vitest config picks
+      # the tests and what coverage measures.
+      - name: "Vitest"
+        run: npx vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov --coverage.reporter=text --coverage.reportsDirectory=coverage-js
+
+      # Informational, like the PHPUnit upload.
+      - name: "Upload coverage to Codecov"
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          use_oidc: true
+          files: coverage-js/lcov.info
+          flags: js
+          fail_ci_if_error: false
+
+      - name: "Keep coverage for SonarQube Cloud"
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-js
+          path: coverage-js/lcov.info
+          retention-days: 1
+
   sonar:
     name: "SonarQube Cloud"
-    needs: [phpunit, wordpress]
+    needs: [phpunit, wordpress, pytest, vitest]
     # Also when a test job is off (skipped); not when tests failed.
-    if: ${{ !cancelled() && needs.phpunit.result != 'failure' && needs.wordpress.result != 'failure' }}
+    if: ${{ !cancelled() && needs.phpunit.result != 'failure' && needs.wordpress.result != 'failure' && needs.pytest.result != 'failure' && needs.vitest.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       # Forks and Dependabot's pull requests get no secrets: skip, don't fail.
@@ -253,8 +354,23 @@ jobs:
         if: steps.token.outputs.run == 'true' && (needs.phpunit.result == 'success' || needs.wordpress.result == 'success')
         uses: actions/download-artifact@v8
         with:
-          pattern: coverage-*
+          # PHP only: the PHPUnit and WordPress reports. Python and JavaScript
+          # coverage have their own steps below.
+          pattern: coverage-{clover,wordpress}
           merge-multiple: true
+
+      - name: "Download Python coverage"
+        if: steps.token.outputs.run == 'true' && needs.pytest.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-python
+
+      - name: "Download JavaScript coverage"
+        if: steps.token.outputs.run == 'true' && needs.vitest.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-js
+          path: coverage-js
 
       - name: "Analysis settings"
         if: steps.token.outputs.run == 'true'
@@ -281,6 +397,11 @@ jobs:
             echo "sonar.exclusions=${exclusions}"
             reports=$(ls coverage.xml coverage-wordpress.xml 2>/dev/null | paste -sd, -)
             [ -n "$reports" ] && echo "sonar.php.coverage.reportPaths=${reports}"
+            if [ -f coverage-python.xml ]; then
+              echo "sonar.python.coverage.reportPaths=coverage-python.xml"
+              echo "sonar.python.version=${PYTHON_VERSION}"
+            fi
+            [ -f coverage-js/lcov.info ] && echo "sonar.javascript.lcov.reportPaths=coverage-js/lcov.info"
             # The repo's own settings (rule exceptions, test inclusions),
             # the file Automatic Analysis reads. Last, so a key set there
             # replaces the generated one.
@@ -295,7 +416,7 @@ jobs:
 
       - name: "SonarQube Cloud scan"
         if: steps.token.outputs.run == 'true'
-        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
