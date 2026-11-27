@@ -46,6 +46,16 @@ on:
         required: false
         type: string
         default: "."
+      vitest:
+        description: "Also run Vitest (from the repo's package.json) with coverage passed to Codecov and SonarQube Cloud. The repo needs vitest and @vitest/coverage-v8 as devDependencies."
+        required: false
+        type: boolean
+        default: false
+      node-version:
+        description: "Node.js version for the Vitest job."
+        required: false
+        type: string
+        default: "24"
     secrets:
       SONAR_TOKEN:
         description: "SonarQube Cloud token. Without it the SonarQube Cloud job is skipped."
@@ -160,11 +170,52 @@ jobs:
           path: coverage-python.xml
           retention-days: 1
 
+  vitest:
+    name: "Vitest"
+    if: inputs.vitest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: "Install"
+        run: npm ci --ignore-scripts
+
+      # lcov for Codecov and SonarQube Cloud; the repo's vitest config picks
+      # the tests and what coverage measures.
+      - name: "Vitest"
+        run: npx vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov --coverage.reporter=text --coverage.reportsDirectory=coverage-js
+
+      # Informational, like the PHPUnit upload.
+      - name: "Upload coverage to Codecov"
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          use_oidc: true
+          files: coverage-js/lcov.info
+          flags: js
+          fail_ci_if_error: false
+
+      - name: "Keep coverage for SonarQube Cloud"
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-js
+          path: coverage-js/lcov.info
+          retention-days: 1
+
   sonar:
     name: "SonarQube Cloud"
-    needs: [phpunit, pytest]
-    # Also when PHPUnit or pytest is off (skipped); not when tests failed.
-    if: ${{ !cancelled() && needs.phpunit.result != 'failure' && needs.pytest.result != 'failure' }}
+    needs: [phpunit, pytest, vitest]
+    # Also when a test job is off (skipped); not when tests failed.
+    if: ${{ !cancelled() && needs.phpunit.result != 'failure' && needs.pytest.result != 'failure' && needs.vitest.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       # Forks and Dependabot's pull requests get no secrets: skip, don't fail.
@@ -200,6 +251,13 @@ jobs:
         with:
           name: coverage-python
 
+      - name: "Download JavaScript coverage"
+        if: steps.token.outputs.run == 'true' && needs.vitest.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-js
+          path: coverage-js
+
       - name: "Analysis settings"
         if: steps.token.outputs.run == 'true'
         id: settings
@@ -228,6 +286,7 @@ jobs:
               echo "sonar.python.coverage.reportPaths=coverage-python.xml"
               echo "sonar.python.version=${PYTHON_VERSION}"
             fi
+            [ -f coverage-js/lcov.info ] && echo "sonar.javascript.lcov.reportPaths=coverage-js/lcov.info"
             # The repo's own settings (rule exceptions, test inclusions),
             # the file Automatic Analysis reads. Last, so a key set there
             # replaces the generated one.

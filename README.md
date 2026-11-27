@@ -72,7 +72,8 @@ Inputs:
 |---|---|
 | PHPUnit | `vendor/bin/phpunit` from the repo's own `composer.json` and `phpunit.xml.dist`, on the floor and the newest PHP. Coverage (pcov, Clover) on the floor, uploaded to Codecov over OIDC. A failed upload doesn't fail CI. |
 | pytest | Only with `pytest: true`: `python -m pytest` with pytest-cov (Cobertura XML) on Python 3.13, for repos with Python scripts next to the plugin. |
-| SonarQube Cloud | CI-based analysis, with the coverage of PHPUnit and pytest when they ran. Project key `<owner>_<repo>`, name `<repo>`, organisation `<owner>`. After a repo rename, change the key in SonarQube Cloud (project Administration → Update Key); the name follows on the next analysis. Skipped, with a notice, when the repo has no `SONAR_TOKEN` secret. That includes forks and Dependabot's pull requests, which get no secrets. |
+| Vitest | Only with `vitest: true`: `npx vitest run` with V8 coverage (lcov) on Node.js 24, for the plugin's JavaScript or TypeScript. Coverage goes to Codecov (flag `js`) and SonarQube Cloud. |
+| SonarQube Cloud | CI-based analysis, with the coverage of PHPUnit, pytest and Vitest when they ran. Project key `<owner>_<repo>`, name `<repo>`, organisation `<owner>`. After a repo rename, change the key in SonarQube Cloud (project Administration → Update Key); the name follows on the next analysis. Skipped, with a notice, when the repo has no `SONAR_TOKEN` secret. That includes forks and Dependabot's pull requests, which get no secrets. |
 
 It is a separate file because Codecov's OIDC upload needs `id-token: write`. GitHub checks a called workflow's permissions when the run starts, skipped jobs included. Asking for that permission in `plugin-checks.yml` would fail every caller that doesn't grant it.
 
@@ -91,6 +92,7 @@ Inputs:
 - `phpunit` (default `true`): set `false` for a repo without PHPUnit tests. SonarQube Cloud still runs.
 - `tests-directory` (default `tests`): analysed as test code when it exists.
 - `pytest` (default `false`): also run pytest; its coverage goes to SonarQube Cloud as `sonar.python.coverage.reportPaths`. With `python-requirements` (a pip requirements file installed first) and `python-coverage-source` (default `.`, the directory pytest-cov measures).
+- `vitest` (default `false`): also run Vitest; its coverage goes to SonarQube Cloud as `sonar.javascript.lcov.reportPaths` (which covers TypeScript too). The repo needs `vitest` and `@vitest/coverage-v8` in `devDependencies` and its own Vitest config for which tests run and which files coverage measures. With `node-version` (default `24`).
 - `sonar-exclusions`: comma-separated paths to skip, on top of `vendor`, `node_modules`, `dist` and the tests.
 - A `.sonarcloud.properties` in the repo (the file Automatic Analysis reads) is added after the generated settings, so rule exceptions (`sonar.issue.ignore.multicriteria…`) and test inclusions carry over when a repo moves to CI-based analysis. A key set there replaces the generated one: a `sonar.exclusions` there must list `vendor/**` itself.
 
